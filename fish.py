@@ -321,12 +321,30 @@ class Fish:
             dir_norm = 0.0
         return count_norm, dir_norm
 
-    def get_inputs(self, food_items, all_fish):
-        self.see(food_items, all_fish)
-        pressure, motion = self.sense_lateral_line(all_fish, food_items)
-        smell_angle, smell_dist = self.smell(food_items)
+    def get_inputs(self, food_items, all_fish, fish_grid=None, food_grid=None):
+        # Use spatial grids for nearby lookups if available
+        if fish_grid:
+            nearby_fish = fish_grid.query(self.x, self.y, config.VISION_RANGE)
+            nearby_fish_ll = fish_grid.query(self.x, self.y, config.LATERAL_LINE_RANGE)
+            tribe_range = config.VISION_RANGE * 2
+            nearby_tribe = fish_grid.query(self.x, self.y, tribe_range)
+        else:
+            nearby_fish = all_fish
+            nearby_fish_ll = all_fish
+            nearby_tribe = all_fish
+
+        if food_grid:
+            nearby_food = food_grid.query(self.x, self.y, config.VISION_RANGE)
+            nearby_food_ll = food_grid.query(self.x, self.y, config.LATERAL_LINE_RANGE)
+        else:
+            nearby_food = food_items
+            nearby_food_ll = food_items
+
+        self.see(nearby_food, nearby_fish)
+        pressure, motion = self.sense_lateral_line(nearby_fish_ll, nearby_food_ll)
+        smell_angle, smell_dist = self.smell(food_items)  # smell is long range, no grid
         oasis_angle, oasis_dist = self.sense_oasis()
-        tribe_count, tribe_dir = self.sense_tribe(all_fish)
+        tribe_count, tribe_dir = self.sense_tribe(nearby_tribe)
 
         # Store for dashboard visualization
         self.lateral_pressure = pressure
@@ -357,7 +375,7 @@ class Fish:
         inputs.append(clamp(self.angular_vel / config.MAX_ANGULAR_VEL, -1, 1))
         inputs.append(clamp(self.energy / config.INITIAL_ENERGY, 0, 1))
         # Mating (1)
-        inputs.append(self.sense_mating_signal(all_fish))
+        inputs.append(self.sense_mating_signal(nearby_fish))
         # Position (2) - "where am I in the world"
         inputs.append(self.x / config.WORLD_WIDTH)
         inputs.append(self.y / config.WORLD_HEIGHT)
@@ -377,11 +395,11 @@ class Fish:
         return inputs
 
     # --- Physics update ---
-    def update(self, food_items, all_fish):
+    def update(self, food_items, all_fish, fish_grid=None, food_grid=None):
         if not self.alive:
             return
 
-        inputs = self.get_inputs(food_items, all_fish)
+        inputs = self.get_inputs(food_items, all_fish, fish_grid, food_grid)
         outputs = self.brain.feed_forward(inputs)
 
         left_fin = float(outputs[0])
@@ -539,42 +557,78 @@ class Fish:
         ox = clamp(ox, 20, config.WORLD_WIDTH - 20)
         oy = clamp(oy, 20, config.WORLD_HEIGHT - 20)
 
-        # Crossover brain + genes from both parents, then mutate
+        # Genes: crossover both parents (Mendelian, works fine)
         child_genes = Genes.crossover(self.genes, mate.genes)
         child = Fish(x=ox, y=oy, genes=child_genes)
-        child.brain = NeuralNetwork.crossover(self.brain, mate.brain)
-        NeuralNetwork.mutate(child.brain, config.MUTATION_RATE, config.MUTATION_STRENGTH)
-        child.brain.reset_state()  # fresh mind for newborn
+
+        # Brain: inherit from the BETTER parent (no crossover - avoids
+        # permutation problem that destroys learned representations)
+        better = self if self.energy >= mate.energy else mate
+        child.brain = better.brain.clone()
+
+        # Adaptive mutation: successful parent → gentler mutation
+        parent_fitness = better.total_food
+        # Scale mutation: 0 food → full rate, 10+ food → half rate
+        fitness_factor = clamp(1.0 - parent_fitness / 20.0, 0.5, 1.0)
+        rate = config.MUTATION_RATE * fitness_factor
+        strength = config.MUTATION_STRENGTH * fitness_factor
+        NeuralNetwork.mutate(child.brain, rate, strength)
+        child.brain.reset_state()
         Genes.mutate(child.genes)
 
         return child
 
 
-def push_fish_apart(population):
-    """Push overlapping fish apart, accounting for different sizes."""
-    for i, a in enumerate(population):
-        if not a.alive:
-            continue
-        for j in range(i + 1, len(population)):
-            b = population[j]
-            if not b.alive:
+def push_fish_apart(population, grid=None):
+    """Push overlapping fish apart, accounting for different sizes.
+    Uses spatial grid if provided for O(N) instead of O(N^2)."""
+    if grid:
+        # Use grid to find nearby pairs
+        max_radius = config.FISH_BODY_RADIUS * 2.5  # max possible collision distance
+        checked = set()
+        for a in population:
+            if not a.alive:
                 continue
-            d = distance(a.x, a.y, b.x, b.y)
-            min_dist = a.body_radius + b.body_radius
-            if d < min_dist and d > 0.1:
-                dx = (b.x - a.x) / d
-                dy = (b.y - a.y) / d
-                overlap = min_dist - d
-                # Heavier fish pushes lighter fish more
-                total_mass = a.genes.size + b.genes.size
-                a_ratio = b.genes.size / total_mass  # lighter fish gets pushed more
-                b_ratio = a.genes.size / total_mass
-                force = overlap * 0.3
-                a.vx -= dx * force * a_ratio
-                a.vy -= dy * force * a_ratio
-                b.vx += dx * force * b_ratio
-                b.vy += dy * force * b_ratio
-                a.x -= dx * overlap * a_ratio * 0.5
-                a.y -= dy * overlap * a_ratio * 0.5
-                b.x += dx * overlap * b_ratio * 0.5
-                b.y += dy * overlap * b_ratio * 0.5
+            nearby = grid.query(a.x, a.y, max_radius)
+            for b in nearby:
+                if b is a or not b.alive:
+                    continue
+                pair_key = (min(id(a), id(b)), max(id(a), id(b)))
+                if pair_key in checked:
+                    continue
+                checked.add(pair_key)
+                d = distance(a.x, a.y, b.x, b.y)
+                min_dist = a.body_radius + b.body_radius
+                if d < min_dist and d > 0.1:
+                    _push_pair(a, b, d, min_dist)
+    else:
+        for i, a in enumerate(population):
+            if not a.alive:
+                continue
+            for j in range(i + 1, len(population)):
+                b = population[j]
+                if not b.alive:
+                    continue
+                d = distance(a.x, a.y, b.x, b.y)
+                min_dist = a.body_radius + b.body_radius
+                if d < min_dist and d > 0.1:
+                    _push_pair(a, b, d, min_dist)
+
+
+def _push_pair(a, b, d, min_dist):
+    """Push two overlapping fish apart."""
+    dx = (b.x - a.x) / d
+    dy = (b.y - a.y) / d
+    overlap = min_dist - d
+    total_mass = a.genes.size + b.genes.size
+    a_ratio = b.genes.size / total_mass
+    b_ratio = a.genes.size / total_mass
+    force = overlap * 0.3
+    a.vx -= dx * force * a_ratio
+    a.vy -= dy * force * a_ratio
+    b.vx += dx * force * b_ratio
+    b.vy += dy * force * b_ratio
+    a.x -= dx * overlap * a_ratio * 0.5
+    a.y -= dy * overlap * a_ratio * 0.5
+    b.x += dx * overlap * b_ratio * 0.5
+    b.y += dy * overlap * b_ratio * 0.5

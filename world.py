@@ -6,6 +6,7 @@ from fish import Fish, push_fish_apart
 from food import FoodManager
 from genes import Genes
 from neural_network import NeuralNetwork
+from spatial import SpatialGrid
 
 
 class HallOfFame:
@@ -93,18 +94,26 @@ class World:
         self.selected_fish = None
         self.best_ever_food = 0
         self.alive_peak = 0
+        # Spatial grids for O(1) neighbor lookups
+        self.fish_grid = SpatialGrid(cell_size=config.VISION_RANGE)
+        self.food_grid = SpatialGrid(cell_size=config.VISION_RANGE)
 
     def tick(self):
         """One simulation step."""
         food_items = self.food.items
 
-        # Update alive fish
-        for fish in self.population:
-            if fish.alive:
-                fish.update(food_items, self.population)
+        # Rebuild spatial grids
+        alive_fish = [f for f in self.population if f.alive]
+        self.fish_grid.insert_all(alive_fish)
+        self.food_grid.insert_all(food_items)
 
-        # Collisions
-        push_fish_apart(self.population)
+        # Update alive fish (pass grids for fast neighbor lookup)
+        for fish in alive_fish:
+            fish.update(food_items, self.population,
+                        fish_grid=self.fish_grid, food_grid=self.food_grid)
+
+        # Collisions (uses fish grid for O(N) performance)
+        push_fish_apart(self.population, grid=self.fish_grid)
         self.food.push_food_from_fish(self.population)
         self.food.update()
         self.food.check_eating(self.population)
@@ -117,7 +126,8 @@ class World:
                 continue
             if self.alive_count + len(new_fish) >= config.MAX_POPULATION:
                 break
-            mate = fish.find_mate(self.population)
+            nearby = self.fish_grid.query(fish.x, fish.y, config.MATE_DISTANCE)
+            mate = fish.find_mate(nearby)
             if mate is None or id(mate) in already_mated:
                 continue
             child = fish.reproduce(mate)

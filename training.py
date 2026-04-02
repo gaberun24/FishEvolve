@@ -19,20 +19,21 @@ TRAINING_SAVE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "t
 
 # Config overrides for the training arena
 TRAINING_OVERRIDES = {
-    'WORLD_WIDTH': 600,
-    'WORLD_HEIGHT': 600,
+    'WORLD_WIDTH': 400,
+    'WORLD_HEIGHT': 400,
     'OASIS_COUNT': 1,
-    'OASIS_RADIUS_W': 250,
-    'OASIS_RADIUS_H': 250,
-    'FOOD_COUNT': 10,
+    'OASIS_RADIUS_W': 180,
+    'OASIS_RADIUS_H': 180,
+    'FOOD_COUNT': 15,
 }
 
 # Training-specific params (not in config)
-TRAIN_POP = 10
+TRAIN_POP = 25
 TRAIN_GEN_TICKS = 900   # 15 sec at 60fps
-TRAIN_ELITE = 2
-TRAIN_MUTATION_RATE = 0.15
-TRAIN_MUTATION_STRENGTH = 0.4
+TRAIN_ELITE = 4
+TRAIN_TOURNAMENT_SIZE = 3
+TRAIN_MUTATION_RATE = 0.12
+TRAIN_MUTATION_STRENGTH = 0.35
 
 
 class TrainingWorld:
@@ -86,32 +87,53 @@ class TrainingWorld:
         if self.gen_tick >= TRAIN_GEN_TICKS:
             self._next_generation()
 
+    def _fitness(self, fish):
+        """Combined fitness: food is primary, distance is secondary (helps early learning)."""
+        # Distance bonus scaled down so 1 food > ~300px travel
+        dist_bonus = fish.distance_traveled / 1000.0
+        return fish.total_food * 10.0 + dist_bonus
+
+    def _tournament_select(self, ranked_with_fitness):
+        """Tournament selection: pick TOURNAMENT_SIZE random, return the best."""
+        contestants = [ranked_with_fitness[np.random.randint(len(ranked_with_fitness))]
+                       for _ in range(TRAIN_TOURNAMENT_SIZE)]
+        return max(contestants, key=lambda x: x[0])
+
     def _next_generation(self):
-        # Sort by food eaten this generation (total_food = lifetime)
-        ranked = sorted(self.population, key=lambda f: f.total_food, reverse=True)
-        self.best_gen_food = ranked[0].total_food if ranked else 0
+        # Calculate fitness for each fish
+        scored = [(self._fitness(f), f) for f in self.population]
+        scored.sort(key=lambda x: x[0], reverse=True)
+
+        self.best_gen_food = scored[0][1].total_food if scored else 0
         self.gen_best_history.append(self.best_gen_food)
 
         # Keep elite brains + genes
         elites = []
-        for fish in ranked[:TRAIN_ELITE]:
-            elites.append((fish.brain.clone(), fish.genes.clone(), fish.total_food))
+        for _, fish in scored[:TRAIN_ELITE]:
+            elites.append((fish.brain.clone(), fish.genes.clone()))
 
         # Create new population
         new_pop = []
         for i in range(TRAIN_POP):
             if i < TRAIN_ELITE:
-                # Elite: keep exact brain, fresh fish
-                brain, genes, _ = elites[i]
+                # Elite: exact copy
+                brain, genes = elites[i]
                 f = Fish(genes=genes.clone())
                 f.brain = brain.clone()
             else:
-                # Offspring: pick a random elite parent, mutate
-                parent_brain, parent_genes, _ = elites[np.random.randint(len(elites))]
-                genes = parent_genes.clone()
-                f = Fish(genes=genes)
-                f.brain = parent_brain.clone()
-                NeuralNetwork.mutate(f.brain, TRAIN_MUTATION_RATE, TRAIN_MUTATION_STRENGTH)
+                # Asymmetric reproduction: brain from BETTER parent + mutation
+                # (no brain crossover - avoids permutation problem)
+                s1, p1 = self._tournament_select(scored)
+                s2, p2 = self._tournament_select(scored)
+                better = p1 if s1 >= s2 else p2
+                f = Fish(genes=Genes.crossover(p1.genes, p2.genes))
+                f.brain = better.brain.clone()
+                # Adaptive mutation: fitter parent → gentler mutation
+                fit_factor = max(0.5, 1.0 - better.total_food / 15.0)
+                NeuralNetwork.mutate(f.brain,
+                                     TRAIN_MUTATION_RATE * fit_factor,
+                                     TRAIN_MUTATION_STRENGTH * fit_factor)
+                f.brain.reset_state()
                 Genes.mutate(f.genes, rate=0.1, strength=0.05)
 
             new_pop.append(f)

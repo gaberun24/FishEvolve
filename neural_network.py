@@ -96,11 +96,39 @@ class NeuralNetwork:
 
     @staticmethod
     def mutate(nn, rate=0.1, strength=0.3):
-        """Mutate weights in-place."""
+        """Mutate weights in-place.
+
+        Recurrent input weights (first layer, last recurrent_size rows)
+        are mutated with reduced strength to preserve recurrent stability.
+        """
         flat = nn.get_flat_weights()
-        mutations = np.random.random(len(flat)) < rate
-        flat[mutations] += np.random.randn(mutations.sum()) * strength
-        # Occasional full reset of a weight (1% chance per weight)
-        resets = np.random.random(len(flat)) < 0.01
-        flat[resets] = np.random.randn(resets.sum())
+        n = len(flat)
+
+        # Build per-weight strength mask (recurrent weights get 40% strength)
+        strengths = np.full(n, strength)
+        if nn.recurrent_size > 0 and len(nn.topology) >= 2:
+            # First weight matrix: shape [topology[0], topology[1]]
+            n_in, n_out = nn.topology[0], nn.topology[1]
+            w0_size = n_in * n_out
+            # The recurrent rows are the last recurrent_size rows
+            sensory_rows = n_in - nn.recurrent_size
+            # Indices of recurrent weights within the flat array
+            for row in range(sensory_rows, n_in):
+                start = row * n_out
+                end = start + n_out
+                if end <= w0_size:
+                    strengths[start:end] = strength * 0.4
+
+        mutations = np.random.random(n) < rate
+        flat[mutations] += np.random.randn(mutations.sum()) * strengths[mutations]
+        # Occasional full reset (1% chance, but not recurrent weights)
+        resets = np.random.random(n) < 0.01
+        if nn.recurrent_size > 0 and len(nn.topology) >= 2:
+            n_in, n_out = nn.topology[0], nn.topology[1]
+            sensory_rows = n_in - nn.recurrent_size
+            for row in range(sensory_rows, n_in):
+                start = row * n_out
+                end = min(start + n_out, n)
+                resets[start:end] = False  # protect recurrent from full reset
+        flat[resets] = np.random.randn(resets.sum()) * 0.5
         nn.set_flat_weights(flat)
