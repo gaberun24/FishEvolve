@@ -26,12 +26,19 @@ A real-time 2D simulation where fish controlled by **deep recurrent neural netwo
 | **Memory Read** | 2 | Values from 2 read heads addressing the memory matrix |
 | **Recurrent State** | 48 | Hidden layer 1 fed back from previous tick |
 
-### Ecosystem
+### Evolution & Genetics
+- **Asymmetric brain inheritance** — offspring gets the *better* parent's brain + mutation (no destructive crossover that breaks learned representations)
+- **Adaptive mutation** — successful parents produce offspring with gentler mutations, preserving good solutions
+- **Recurrent weight protection** — recurrent connection weights mutate at 40% strength to prevent state explosion
 - **Sexual reproduction** with genetic compatibility — fish must find a mate with similar genes (size, color)
-- **Gene system** — size, metabolism, fin size, color are heritable and affect physics
+- **Gene system** — size, metabolism, fin size, color are heritable and affect physics (genes still use Mendelian crossover)
 - **Oasis-based food** — food spawns in 4 oasis zones, fish must navigate to find them
 - **Hall of Fame** — best fish ever are remembered and respawned on population collapse
 - **Continuous ecosystem** — no fixed generations, fish live, reproduce, and die naturally
+
+### Performance
+- **Spatial hash grid** — O(1) neighbor lookups instead of O(N²) brute force for all sensory and collision checks
+- ~6x speedup at 50 fish, scales even better with larger populations
 
 ### Visualization
 - **Real-time dashboard** (N key) — vision radar with kin recognition, lateral line arcs, smell/oasis/tribe compasses, world mini-map, compass rose, memory matrix heatmap with read/write head markers
@@ -90,6 +97,7 @@ world.py             Ecosystem: population, hall of fame, save/load
 camera.py            Zoom/pan camera with follow mode
 renderer.py          Full rendering: fish, food, HUD, dashboard, radar
 brain_visualizer.py  Neural network visualization overlay
+spatial.py           Spatial hash grid for O(1) neighbor lookups
 config_menu.py       Live parameter tweaking UI
 training.py          Isolated training arena with generational evolution
 utils.py             Math helpers (angle, distance, clamp)
@@ -100,7 +108,7 @@ utils.py             Math helpers (angle, distance, clamp)
 1. **Each fish** has a brain (deep recurrent NN), genes, and a 4x4 memory matrix
 2. **Every tick**, the fish perceives the world through 72 sensory inputs + 48 recurrent state = 120 total inputs
 3. **The brain outputs** 12 values: 5 motor (fins, tail, mouth, mating signal), 3 memory write (row, col, value), 4 memory read (2 heads x row, col)
-4. **Fish that eat** enough food can find compatible mates and reproduce — offspring inherit a crossover of both parents' brains and genes with mutations
+4. **Fish that eat** enough food can find compatible mates and reproduce — offspring inherit the better parent's brain (+ adaptive mutation) and a crossover of both parents' genes
 5. **Natural selection** — fish that can't find food die. Fish that eat well and find mates pass on their neural architecture.
 6. Over time, the population evolves increasingly effective foraging, navigation, and social behaviors.
 
