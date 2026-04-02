@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.pyo
+saves/
+trained_genomes.json
+.claude/
