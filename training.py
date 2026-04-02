@@ -19,18 +19,18 @@ TRAINING_SAVE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "t
 
 # Config overrides for the training arena
 TRAINING_OVERRIDES = {
-    'WORLD_WIDTH': 400,
-    'WORLD_HEIGHT': 400,
+    'WORLD_WIDTH': 600,
+    'WORLD_HEIGHT': 600,
     'OASIS_COUNT': 1,
-    'OASIS_RADIUS_W': 180,
-    'OASIS_RADIUS_H': 180,
-    'FOOD_COUNT': 15,
+    'OASIS_RADIUS_W': 250,
+    'OASIS_RADIUS_H': 250,
+    'FOOD_COUNT': 10,
 }
 
 # Training-specific params (not in config)
-TRAIN_POP = 25
+TRAIN_POP = 10
 TRAIN_GEN_TICKS = 900   # 15 sec at 60fps
-TRAIN_ELITE = 4
+TRAIN_ELITE = 2
 TRAIN_TOURNAMENT_SIZE = 3
 TRAIN_MUTATION_RATE = 0.12
 TRAIN_MUTATION_STRENGTH = 0.35
